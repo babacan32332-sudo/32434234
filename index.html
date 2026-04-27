@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Delta FPS | Web Edition</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; }
+        
+        /* OYUN ICI UI */
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
+        #crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #0f0; font-size: 20px; font-weight: bold; }
+        #hud { position: absolute; bottom: 30px; left: 30px; color: white; font-size: 22px; text-shadow: 2px 2px 4px #000; }
+        .bar-bg { width: 250px; height: 15px; background: rgba(0,0,0,0.6); border: 2px solid #fff; margin-top: 5px; transform: skewX(-15deg); }
+        #hp-bar { width: 100%; height: 100%; background: linear-gradient(90deg, #ff0000, #ff5500); transition: width 0.2s; }
+        #vp-display { position: absolute; top: 20px; right: 20px; color: #ff4655; font-size: 24px; font-weight: bold; text-shadow: 1px 1px 2px #000; }
+        
+        /* LOBI (CS2 STYLE) */
+        #lobby { position: absolute; width: 100%; height: 100%; background: radial-gradient(circle, #2a2a35 0%, #111 100%); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; color: white; }
+        .lobby-header { position: absolute; top: 20px; left: 30px; font-size: 30px; font-weight: bold; letter-spacing: 2px; color: #fff; }
+        .vp-balance { color: #ff4655; font-size: 20px; }
+        .map-container { background: url('https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&q=80&w=800') center/cover; width: 400px; height: 250px; border: 3px solid #444; border-radius: 8px; margin-bottom: 30px; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.8); }
+        .map-name { position: absolute; bottom: 10px; left: 15px; font-size: 24px; font-weight: bold; text-shadow: 2px 2px 4px #000; }
+        #btn-ready { background: #4caf50; color: white; border: none; padding: 15px 50px; font-size: 24px; font-weight: bold; border-radius: 4px; cursor: pointer; text-transform: uppercase; letter-spacing: 1px; transition: 0.2s; box-shadow: 0 5px 15px rgba(76, 175, 80, 0.4); }
+        #btn-ready:hover { background: #45a049; transform: translateY(-2px); }
+        
+        #damage-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,0,0,0.3); opacity: 0; transition: opacity 0.1s; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+    <div id="lobby">
+        <div class="lobby-header">DELTA <span style="color: #4caf50;">FPS</span></div>
+        <div style="position: absolute; top: 25px; right: 30px;" class="vp-balance">VP: <span id="lobby-vp">0</span></div>
+        
+        <div class="map-container">
+            <div class="map-name">MAP: ASCENT (DEMO)</div>
+        </div>
+        
+        <button id="btn-ready">MATCH READY</button>
+        <p style="margin-top: 20px; color: #888;">Controls: WASD Move | SPACE Jump | CTRL Crouch | L-Click Shoot</p>
+    </div>
+
+    <div id="ui-layer">
+        <div id="crosshair">+</div>
+        <div id="damage-overlay"></div>
+        <div id="hud">
+            <div>HP: <span id="hp-text">100</span></div>
+            <div class="bar-bg"><div id="hp-bar"></div></div>
+            <div style="margin-top: 15px; color: #0f0;">AMMO: <span id="ammo-text">30</span>/30</div>
+        </div>
+        <div id="vp-display">VP: <span id="game-vp">0</span></div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+        const config = {
+            speed: 12, jumpForce: 12, gravity: 30, playerHeight: 2, crouchHeight: 1,
+            maxHp: 100, maxAmmo: 30, vpPerKill: 20
+        };
+
+        const state = {
+            hp: config.maxHp, ammo: config.maxAmmo, vp: 0,
+            isCrouching: false, velocity: new THREE.Vector3()
+        };
+
+        const keys = { w: false, a: false, s: false, d: false, space: false, ctrl: false };
+        const enemies = [];
+        let scene, camera, renderer, controls, clock;
+        let weaponMesh;
+
+        // UI
+        const uiLayer = document.getElementById('ui-layer');
+        const lobby = document.getElementById('lobby');
+        const btnReady = document.getElementById('btn-ready');
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // Sky color for Ascent feel
+            
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            clock = new THREE.Clock();
+
+            // Lamba
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            dirLight.position.set(20, 50, 20);
+            scene.add(dirLight);
+            scene.add(new THREE.AmbientLight(0x606060));
+
+            setupMap();
+            
+            // HATA BURADA DUZELTILDI: Controls once, sonra Player
+            controls = new PointerLockControls(camera, document.body);
+            scene.add(controls.getObject());
+            controls.getObject().position.y = config.playerHeight;
+            
+            setupWeapon();
+
+            for(let i=0; i<3; i++) spawnEnemy();
+
+            // Events
+            btnReady.addEventListener('click', () => controls.lock());
+            
+            controls.addEventListener('lock', () => {
+                lobby.style.display = 'none';
+                uiLayer.style.display = 'block';
+            });
+            controls.addEventListener('unlock', () => {
+                lobby.style.display = 'flex';
+                uiLayer.style.display = 'none';
+                document.getElementById('lobby-vp').innerText = state.vp;
+            });
+
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousedown', shoot);
+
+            animate();
+        }
+
+        function setupMap() {
+            // Zemin
+            const floorGeo = new THREE.PlaneGeometry(100, 100);
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            scene.add(floor);
+
+            // Basit Kutu (Harita engelleri)
+            const boxMat = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
+            for(let i=0; i<10; i++) {
+                const mesh = new THREE.Mesh(new THREE.BoxGeometry(4, 4, 4), boxMat);
+                mesh.position.set((Math.random() - 0.5) * 60, 2, (Math.random() - 0.5) * 60);
+                scene.add(mesh);
+            }
+        }
+
+        function setupWeapon() {
+            // Basit Silah Modeli (Mavi renkli)
+            const gunGeo = new THREE.BoxGeometry(0.1, 0.15, 0.6);
+            weaponMesh = new THREE.Mesh(gunGeo, new THREE.MeshStandardMaterial({ color: 0x0055ff }));
+            weaponMesh.position.set(0.3, -0.2, -0.5);
+            camera.add(weaponMesh);
+        }
+
+        function spawnEnemy() {
+            // Silindir yerine Diktorgen (Kafadan vurus hesaplamak icin daha iyi)
+            const geo = new THREE.BoxGeometry(1.2, 2.5, 1.2);
+            const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: 0xff0000 }));
+            mesh.position.set((Math.random() - 0.5) * 40, 1.25, (Math.random() - 0.5) * 40);
+            scene.add(mesh);
+            enemies.push({ mesh: mesh, hp: 100 });
+        }
+
+        function onKeyDown(e) {
+            switch(e.code) {
+                case 'KeyW': keys.w = true; break;
+                case 'KeyA': keys.a = true; break;
+                case 'KeyS': keys.s = true; break;
+                case 'KeyD': keys.d = true; break;
+                case 'Space': 
+                    if(controls.getObject().position.y <= config.playerHeight + 0.1) state.velocity.y = config.jumpForce; 
+                    break;
+                case 'ControlLeft': 
+                    state.isCrouching = true; 
+                    // Egilme mekanigi (React suresi simulasyonu: aninda yariya iner)
+                    camera.position.y = config.crouchHeight;
+                    break;
+            }
+        }
+
+        function onKeyUp(e) {
+            switch(e.code) {
+                case 'KeyW': keys.w = false; break;
+                case 'KeyA': keys.a = false; break;
+                case 'KeyS': keys.s = false; break;
+                case 'KeyD': keys.d = false; break;
+                case 'ControlLeft': 
+                    state.isCrouching = false; 
+                    camera.position.y = 0; // Camera Player icinde 0, player kendi yuksekliginde
+                    break;
+            }
+        }
+
+        function shoot(e) {
+            if(e.button !== 0 || !controls.isLocked) return;
+            
+            weaponMesh.position.z = -0.4; // Recoil animasyon
+            setTimeout(() => weaponMesh.position.z = -0.5, 50);
+
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+            
+            const enemyMeshes = enemies.map(e => e.mesh);
+            const intersects = raycaster.intersectObjects(enemyMeshes);
+
+            if (intersects.length > 0) {
+                const hit = intersects[0];
+                const enemyObj = enemies.find(e => e.mesh === hit.object);
+                
+                // Headshot Mantigi: Mermi isabet noktasi dusmanin merkezinden ne kadar yukarida?
+                const hitHeight = hit.point.y - hit.object.position.y;
+                const isHeadshot = hitHeight > 0.8; // Dusmanin ust kismi
+
+                enemyObj.hp -= isHeadshot ? 100 : 35; // Kafadan tek yer, govdeden az yer
+                
+                // Hasar efekti (Kafa ise sari, degilse beyaz)
+                hit.object.material.color.setHex(isHeadshot ? 0xffff00 : 0xffffff);
+                setTimeout(() => { if(enemyObj.hp > 0) hit.object.material.color.setHex(0xff0000); }, 100);
+
+                if(enemyObj.hp <= 0) {
+                    scene.remove(hit.object);
+                    enemies.splice(enemies.indexOf(enemyObj), 1);
+                    state.vp += config.vpPerKill;
+                    document.getElementById('game-vp').innerText = state.vp;
+                    spawnEnemy(); // Yeni dusman
+                }
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if(!controls.isLocked) return;
+
+            const dt = Math.min(clock.getDelta(), 0.1);
+            const player = controls.getObject();
+
+            // Hareket Sistemi
+            state.velocity.x -= state.velocity.x * 10.0 * dt;
+            state.velocity.z -= state.velocity.z * 10.0 * dt;
+            
+            const dir = new THREE.Vector3();
+            camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
+            const right = new THREE.Vector3().crossVectors(camera.up, dir).normalize();
+
+            if(keys.w) { state.velocity.x += dir.x * config.speed * dt; state.velocity.z += dir.z * config.speed * dt; }
+            if(keys.s) { state.velocity.x -= dir.x * config.speed * dt; state.velocity.z -= dir.z * config.speed * dt; }
+            if(keys.a) { state.velocity.x -= right.x * config.speed * dt; state.velocity.z -= right.z * config.speed * dt; }
+            if(keys.d) { state.velocity.x += right.x * config.speed * dt; state.velocity.z += right.z * config.speed * dt; }
+
+            // Yercekimi & Ziplama
+            state.velocity.y -= config.gravity * dt;
+            player.position.addScaledVector(state.velocity, dt);
+
+            const currentBaseHeight = state.isCrouching ? config.crouchHeight : config.playerHeight;
+            if(player.position.y < currentBaseHeight) {
+                state.velocity.y = 0;
+                player.position.y = currentBaseHeight;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>
