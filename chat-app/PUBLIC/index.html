@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chat App</title>
+
+<style>
+body {
+    margin:0;
+    font-family:Arial;
+    display:flex;
+    height:100vh;
+    background:linear-gradient(135deg,#111,#1f1f2f);
+    color:white;
+}
+
+/* SIDEBAR */
+#sidebar {
+    width:30%;
+    background:rgba(255,255,255,0.05);
+    backdrop-filter: blur(10px);
+    padding:10px;
+}
+
+/* CHAT */
+#chat {
+    flex:1;
+    display:flex;
+    flex-direction:column;
+}
+
+#msgs {
+    flex:1;
+    overflow:auto;
+    padding:10px;
+}
+
+.msg {
+    padding:10px;
+    margin:5px;
+    border-radius:10px;
+    max-width:70%;
+}
+
+.me { background:#00aaff; margin-left:auto; }
+.other { background:#333; }
+
+#input {
+    display:flex;
+}
+input {
+    flex:1;
+    padding:10px;
+    border:none;
+}
+button {
+    padding:10px;
+    background:#00aaff;
+    border:none;
+    color:white;
+}
+
+/* USERS */
+.user {
+    padding:8px;
+    cursor:pointer;
+}
+.user:hover { background:#ffffff10; }
+
+@media(max-width:768px){
+    #sidebar { width:40%; }
+}
+</style>
+</head>
+
+<body>
+
+<div id="sidebar">
+    <h3>Online</h3>
+    <div id="users"></div>
+</div>
+
+<div id="chat">
+    <div id="msgs"></div>
+    <div id="input">
+        <input id="msg">
+        <button onclick="send()">Send</button>
+    </div>
+</div>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+
+<script>
+let socket = io();
+let token = localStorage.getItem("token");
+
+if(!token){
+    let email = prompt("Email:");
+    let code;
+
+    fetch("/send-code",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({email})
+    });
+
+    code = prompt("Kod (console bak)");
+    let username = prompt("Username");
+
+    fetch("/verify",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({email,code,username})
+    })
+    .then(r=>r.json())
+    .then(d=>{
+        localStorage.setItem("token", d.token);
+        location.reload();
+    });
+
+}else{
+    socket.emit("join", token);
+}
+
+/* ONLINE */
+socket.on("online",list=>{
+    let u=document.getElementById("users");
+    u.innerHTML="";
+    list.forEach(x=>{
+        let d=document.createElement("div");
+        d.className="user";
+        d.innerText=x;
+        u.appendChild(d);
+    });
+});
+
+/* MESSAGE */
+socket.on("message",m=>{
+    let div=document.createElement("div");
+    div.className="msg " + (m.from===m.my?"me":"other");
+    div.innerText=m.text;
+    document.getElementById("msgs").appendChild(div);
+});
+
+function send(){
+    let input=document.getElementById("msg");
+
+    socket.emit("message",{
+        from:"me",
+        text:input.value
+    });
+
+    input.value="";
+}
+</script>
+
+</body>
+</html>
